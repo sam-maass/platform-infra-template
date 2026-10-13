@@ -154,5 +154,49 @@ async def connect():
     )
 ```
 
+## Exploring the repository
+
+The whole thing is about 1,400 lines of Terraform, Python, SQL and YAML.
+
+```
+.
+├── apps/
+│   ├── apps.tf                      one module call per app: the requests
+│   ├── platform.tf                  looks up the shared platform and builds local.platform
+│   └── terraform.tfvars.example     platform values for local plans
+├── modules/app-database/
+│   ├── variables.tf                 what a request can say, with validation
+│   ├── main.tf                      the five steps for one app
+│   ├── outputs.tf                   database, login, role ARN and app URL
+│   └── scripts/
+│       ├── rds_sql.py               SQL through the RDS Data API
+│       ├── vercel_api.py            network link and redeploy through the Vercel API
+│       └── cleanup_removed.py       drops and unlinks removed apps, from the saved plan
+├── bootstrap/
+│   ├── main.tf                      one-time setup: state bucket, pipeline roles, boundary, hr_reporting
+│   └── terraform.tfvars.example     values for the bootstrap
+├── sql/
+│   └── hr_reporting.sql             an example shared database and its read-only profile
+├── .github/workflows/apps.yml       plan on pull requests, apply on merge
+└── .claude/skills/provision-app-database/
+    └── SKILL.md                     the request flow, written for an agent
+```
+
+This reading order follows one request from the block you write to the resources it creates, then covers the guardrails around it:
+
+1. `apps/apps.tf` is the interface. It holds one commented example, and every request adds a block like it.
+2. `modules/app-database/variables.tf` defines what a request can say. The validation rules reject bad project and database names before anything runs, and `environments` accepts only production and preview.
+3. `modules/app-database/main.tf` is the core. Read its five numbered steps in order. In step 2, look at the trust policy's `sub` claims and the `precondition` that checks the issuer mode. Steps 1 and 4 keep what their destroy-time provisioners need in `input`.
+4. `modules/app-database/scripts/rds_sql.py` is the SQL behind step 1. `create` and `drop` show the login without a password, the `rds_iam` grant, the guardrails and both access levels. `ident()` and `literal()` validate every name, so a name can't inject SQL.
+5. `modules/app-database/scripts/vercel_api.py` covers steps 4 and 5: it sets `connectConfigurations` on the project, then redeploys the current production deployment and waits for it.
+6. `apps/platform.tf` shows where `local.platform` comes from. It only looks up the shared cluster, the Vercel OIDC provider and the boundary, and creates nothing.
+7. `bootstrap/main.tf` holds the security model: the plan and apply roles with their GitHub OIDC trust conditions, the `vercel-app-boundary` policy, and the `iam:PermissionsBoundary` condition and explicit deny that make the boundary mandatory.
+8. `.github/workflows/apps.yml` turns a pull request into a plan comment and a merge into an apply. The apply job runs the cleanup script between plan and apply.
+9. `modules/app-database/scripts/cleanup_removed.py` is the workaround for removed module calls. Terraform skips destroy-time provisioners when a module call disappears, so this script reads the saved plan and runs those steps itself.
+10. `sql/hr_reporting.sql` shows how to share data read-only: a raw table, curated views over it, and the `hr_reporting_read` profile that apps get.
+11. `.claude/skills/provision-app-database/SKILL.md` walks an agent through the same flow, including the checks it must pass before it merges.
+
+For the security model alone, read steps 3, 4 and 7.
+
 > [!IMPORTANT]
 > Keep your working copy private. Plan comments and workflow logs include your AWS account ID, resource ARNs and Vercel project IDs.
