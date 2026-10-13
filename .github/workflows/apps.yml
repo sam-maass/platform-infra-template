@@ -1,0 +1,123 @@
+name: apps
+
+# Pull request: terraform plan, posted as a comment. Merge to main: terraform apply.
+# AWS: GitHub's OIDC token is exchanged for a role, no stored keys.
+# Vercel: VERCEL_API_TOKEN, a repository secret.
+# Platform values (team, network, cluster, state bucket) are repository variables.
+
+on:
+  pull_request:
+    paths: ["apps/**", "modules/**", ".github/workflows/apps.yml"]
+  push:
+    branches: [main]
+    paths: ["apps/**", "modules/**", ".github/workflows/apps.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: apps-terraform
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash # -eo pipefail
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  VERCEL_API_TOKEN: ${{ secrets.VERCEL_API_TOKEN }}
+  TF_VAR_vercel_team: ${{ vars.VERCEL_TEAM }}
+  TF_VAR_vercel_network_id: ${{ vars.VERCEL_NETWORK_ID }}
+  TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+  TF_VAR_cluster_identifier: ${{ vars.CLUSTER_IDENTIFIER }}
+  BACKEND_CONFIG: -backend-config=bucket=${{ vars.TF_STATE_BUCKET }} -backend-config=region=${{ vars.AWS_REGION }}
+
+jobs:
+  plan:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # GitHub OIDC token for AWS
+      contents: read
+      pull-requests: write # plan comment
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - run: terraform fmt -check -recursive
+      - run: terraform -chdir=apps init $BACKEND_CONFIG # word splitting intended
+      - id: plan
+        run: terraform -chdir=apps plan -no-color | tee plan.txt
+
+      - name: Post the plan
+        if: always() && steps.plan.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          summary=$(grep -m1 -E '^(Plan:|No changes\.|Error:)' plan.txt || echo "Plan failed")
+          {
+            echo "### Terraform plan for \`apps/\`"
+            echo
+            echo "**${summary}**"
+            echo
+            echo "Merging applies this plan."
+            echo
+            echo "<details><summary>Full plan</summary>"
+            echo
+            echo '```'
+            sed -n '/Terraform will perform\|Error:/,$p' plan.txt | head -c 60000
+            echo '```'
+            echo "</details>"
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+          gh pr comment "$PR" --body-file comment.md --edit-last --create-if-none \
+            || gh pr comment "$PR" --body-file comment.md
+
+  apply:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.16.5
+          terraform_wrapper: false
+
+      - run: terraform -chdir=apps init $BACKEND_CONFIG # word splitting intended
+      - run: terraform -chdir=apps plan -no-color -out=tfplan
+
+      # Terraform skips destroy-time provisioners for removed module calls, so
+      # drop their database users and network links from the saved plan first.
+      - name: Clean up removed apps
+        run: |
+          terraform -chdir=apps show -json tfplan > plan.json
+          python3 modules/app-database/scripts/cleanup_removed.py plan.json
+
+      - run: terraform -chdir=apps apply -no-color tfplan
+
+      - name: Summary
+        run: |
+          {
+            echo "### Apps on the platform"
+            echo
+            terraform -chdir=apps state list | grep -o '^module\.[a-z0-9_]*' | sort -u \
+              | sed 's/^module\./- /' || echo "- none"
+          } >> "$GITHUB_STEP_SUMMARY"

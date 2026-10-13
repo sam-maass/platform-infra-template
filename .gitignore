@@ -1,0 +1,14 @@
+# Terraform: keep lock files, never commit state, plans or variable values
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+plan.txt
+comment.md
+*.tfvars
+
+__pycache__/
+.DS_Store
+.env*
+plan.json

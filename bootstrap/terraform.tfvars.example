@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (git-ignored) before the one-time bootstrap apply.
+aws_region         = "eu-central-1"
+github_repository  = "your-org/your-repo"
+github_sub_prefix  = "repo:your-org@ORG_ID/your-repo@REPO_ID" # gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
+vercel_team        = "your-team-slug"
+cluster_identifier = "your-aurora-cluster"

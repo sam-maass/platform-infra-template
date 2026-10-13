@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (git-ignored) for local plans. GitHub Actions sets
+# the same values from repository variables instead.
+vercel_team        = "your-team-slug"
+vercel_network_id  = "your-secure-compute-network-id"
+aws_region         = "eu-central-1"
+cluster_identifier = "your-aurora-cluster"
