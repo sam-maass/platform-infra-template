@@ -3,12 +3,12 @@
 #
 # Example:
 #
-# # expense-tracker: new database, owned by the app
-# module "expense_tracker" {
+# # my-application: new database, owned by the app
+# module "my_application" {
 #   source   = "../modules/app-database"
 #   platform = local.platform
 #
-#   vercel_project = "expense-tracker"
-#   database       = "expense_tracker"
+#   vercel_project = "my-application"
+#   database       = "my_application"
 #   access         = "owner"
 # }
